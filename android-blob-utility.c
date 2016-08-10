@@ -18,6 +18,8 @@
  * MA  02110-1301, USA.
  */
 
+#include "android-blob-utility.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -34,52 +36,17 @@
 #include <readline/history.h>
 #endif
 
-#define strip_newline(line)         \
-    if (strchr(line, '\n'))         \
-        *strchr(line, '\n') = '\0';
-
 void dot_so_finder(char *filename);
 void check_emulator_for_lib(char *emulator_check);
 
-#define MAX_LIB_NAME 50
-#define ALL_LIBS_SIZE 16384 /* 16KB */
+char system_dump_root_buf[256] = SYSTEM_DUMP_ROOT;
+char *system_dump_root = system_dump_root_buf;
 
-/* #define DEBUG */
+char system_vendor_buf[32] = SYSTEM_VENDOR;
+char *system_vendor = system_vendor_buf;
 
-#ifdef VARIABLES_PROVIDED
-#include "system_directories.h"
-#endif
-/* The above flag should be enabled in the Makefile if you no-longer want to enter your device's
- * source tree's directory every single time this program is run. Simply enable the flag, and edit
- * the header file titled "system_directories.h" to point your device's system dump directory in
- * the correct location on your computer, and recompile.
- */
-
-const char *blob_directories[] = {
-    "/vendor/lib/egl/",
-    "/vendor/lib/hw/",
-    "/vendor/lib/",
-    "/vendor/bin/",
-    "/lib/egl/",
-    "/lib/hw/",
-    "/lib/",
-    "/bin/",
-    NULL
-};
-
-#ifdef VARIABLES_PROVIDED
-#ifndef USE_READLINE
-const char system_dump_root[256] = SYSTEM_DUMP_ROOT;
-#else
-const char *system_dump_root = SYSTEM_DUMP_ROOT;
-#endif /* USE_READLINE */
-#else
-#ifndef USE_READLINE
-char system_dump_root[256];
-#else
-char *system_dump_root;
-#endif /* USE_READLINE */
-#endif
+char system_device_buf[32] = SYSTEM_DEVICE;
+char *system_device = system_device_buf;
 
 char all_libs[ALL_LIBS_SIZE] = {0};
 char *sdk_buffer;
@@ -134,14 +101,9 @@ bool char_is_valid(char *s) {
 
 bool check_if_repeat(char *lib) {
 
-    int i;
-    int lib_length = strlen(lib);
-
-    for (i = 0; i < ALL_LIBS_SIZE; i++) {
-        if (!memcmp(all_libs + i, lib, lib_length)) {
-            /* printf("skipping %s!!\n", lib); */
-            return true;
-        }
+    if (memmem(all_libs, ALL_LIBS_SIZE, lib, strlen(lib))) {
+        /* printf("skipping %s!!\n", lib); */
+        return true;
     }
     return false;
 }
@@ -198,7 +160,12 @@ bool build_prop_checker(void) {
  */
 
 bool check_emulator_files_for_match(char *emulator_full_path) {
-    return strstr(sdk_buffer, emulator_full_path);
+    char *p;
+
+    p = strstr(sdk_buffer, emulator_full_path);
+    if (p && *(p - 1) != '#')
+        return true;
+    return false;
 }
 
 /* Receive two strings; the first part of the library, and the second part. Then look in the library
@@ -213,6 +180,9 @@ void find_wildcard_libraries(char *beginning, char *end) {
     char full_path[256] = {0};
     int i;
     bool found = false;
+
+    if (strchr(end, '%') && strstr(end, lib_ending))
+        end = strstr(end, lib_ending);
 
     for (i = 0; blob_directories[i]; i++) {
         sprintf(full_path, "%s%s", system_dump_root, blob_directories[i]);
@@ -230,7 +200,7 @@ void find_wildcard_libraries(char *beginning, char *end) {
     }
 
     if (!found)
-        printf("warning: wildcard %s%s%s missing or broken\n", beginning, "%s", end);
+        printf("warning: wildcard %s%%s%s missing or broken\n", beginning, end);
 }
 
 /* This function will split the wildcard library name into two parts; the beginning part,
@@ -242,8 +212,8 @@ void find_wildcard_libraries(char *beginning, char *end) {
 void process_wildcard(char *wildcard) {
 
     char *ptr;
-    char beginning[16] = {0};
-    char end[16] = {0};
+    char beginning[64] = {0};
+    char end[64] = {0};
 
     ptr = strchr(wildcard, '%');
     if (ptr) {
@@ -268,15 +238,16 @@ void get_lib_from_system_dump(char *system_check) {
 
     int i;
     char system_dump_path_to_blob[256];
+    bool found_hit = false;
 
     for (i = 0; blob_directories[i]; i++) {
         sprintf(system_dump_path_to_blob, "%s%s%s", system_dump_root, blob_directories[i],
                 system_check);
         if (!access(system_dump_path_to_blob, F_OK)) {
-            printf("vendor/manufacturer/device/proprietary%s%s:system%s%s\n", blob_directories[i], system_check,
-                    blob_directories[i], system_check);
+            printf("vendor/%s/%s/proprietary%s%s:system%s%s\n", system_vendor, system_device,
+                    blob_directories[i], system_check, blob_directories[i], system_check);
             dot_so_finder(system_dump_path_to_blob);
-            return;
+            found_hit = true;
         }
     }
 
@@ -286,9 +257,12 @@ void get_lib_from_system_dump(char *system_check) {
      * process the wildcard accordingly, or print out that it's an obsolete reference, or
      * possibly a program fuck-up.
      */
-    if (strchr(system_check, '%'))
+    if (strchr(system_check, '%')) {
         process_wildcard(system_check);
-    else
+        return;
+    }
+
+    if (!found_hit)
         printf("warning: blob file %s missing or broken\n", system_check);
 }
 
@@ -354,8 +328,6 @@ void check_emulator_for_lib(char *emulator_check) {
 
 void get_full_lib_name(char *found_lib) {
 
-    const char *lib = "lib";
-    const char *egl = "egl";
     char *ptr, *peek;
 
     char full_name[256] = {0};
@@ -373,7 +345,7 @@ void get_full_lib_name(char *found_lib) {
      * times, in which we will bail out citing that it was probably a false-positive
      */
     for (num_chars = 0; num_chars <= MAX_LIB_NAME; num_chars++) {
-        if (!strncmp(ptr, egl, 3) || !strncmp(ptr, lib, 3)) {
+        if (!strncmp(ptr, egl_beginning, strlen(egl_beginning)) || !strncmp(ptr, lib_beginning, strlen(lib_beginning))) {
             peek = ptr - 1;
             /* the peek below would fall victim to a file which is looking directly for
              * "/system/lib/lib_whatever.so", because it would now point to lib/lib_whatever.so
@@ -398,7 +370,7 @@ void get_full_lib_name(char *found_lib) {
              * and not just "lib.so" which would have been chosen if not for the peek.
              */
             while (char_is_valid(peek) && *peek--) {
-                if (!strncmp(peek, lib, 3)) {
+                if (!strncmp(peek, lib_beginning, strlen(lib_beginning))) {
 #ifdef DEBUG
                     printf("Possible lib_lib.so! %s\n", peek);
 #endif
@@ -410,7 +382,7 @@ void get_full_lib_name(char *found_lib) {
         if (num_chars == MAX_LIB_NAME) {
 #ifdef DEBUG
             printf("Character limit exceeded! Full string was:\n");
-            for (num_chars = 0; num_chars < MAX_LIB_NAME + 3; num_chars++) {
+            for (num_chars = 0; num_chars < MAX_LIB_NAME + strlen(lib_beginning); num_chars++) {
                 printf("%c", *ptr);
                 ptr++;
             }
@@ -421,7 +393,7 @@ void get_full_lib_name(char *found_lib) {
         ptr--;
         peek--;
     }
-    len = (long)(found_lib + 3) - (long)ptr;
+    len = (long)(found_lib + strlen(lib_beginning)) - (long)ptr;
     strncpy(full_name, ptr, len);
 
     check_emulator_for_lib(full_name);
@@ -438,12 +410,12 @@ void get_full_lib_name(char *found_lib) {
 
 void dot_so_finder(char *filename) {
 
-    const char *lib_string = ".so";
-
     int file_fd;
 
     char *file_map;
     char *ptr;
+    char *prev;
+    off_t size;
     struct stat file_stat;
 
     file_fd = open(filename, O_RDONLY);
@@ -452,13 +424,72 @@ void dot_so_finder(char *filename) {
 
     file_map = mmap(0, file_stat.st_size, PROT_READ, MAP_PRIVATE, file_fd, 0);
 
-    for (ptr = file_map; ptr < file_map + file_stat.st_size; ptr++) {
-        if (!memcmp(ptr, lib_string, 3) && char_is_valid(ptr - 1))
+    ptr = file_map;
+    prev = ptr;
+    size = file_stat.st_size;
+
+    while ((ptr = memmem(ptr, size, lib_ending, strlen(lib_ending))) != NULL) {
+
+        if (ptr >= file_map + file_stat.st_size)
+            break;
+
+        if (char_is_valid(ptr - 1))
             get_full_lib_name(ptr);
+
+        size -= ptr - prev;
+        prev = ptr;
+
+        ptr++; /* Advance pointer one character to ensure we don't keep looping
+                  over the same ".so" instance over and over again */
     }
 
     munmap(file_map, file_stat.st_size);
     close(file_fd);
+}
+
+void remove_unwanted_characters(char *input) {
+
+    char *p;
+
+    /* If the received string is actually '/home/android/dump', with
+     * apostrophes, shift elements back one index to remove the front '
+     */
+
+    if (*input == '\'')
+        memmove(&input[0], &input[1], strlen(input));
+
+    p = strrchr(input, ' '); /* turn possible space at end to null */
+    if (p)
+        *p = '\0';
+
+    p = strrchr(input, '\''); /* turn possible apostrophe at end to null */
+    if (p)
+        *p = '\0';
+
+    p = strrchr(input, '\n'); /* turn possible newline at end to null */
+    if (p)
+        *p = '\0';
+
+    p = strchr(input, '\0'); /* remove final slash in /home/android/dump/ */
+    if (p && *(p - 1) == '/')
+        *(p - 1) = '\0';
+}
+
+void read_user_input(char *input, int len, char *message) {
+
+#ifdef USE_READLINE
+    char *tmp;
+#endif
+
+#ifndef USE_READLINE
+    printf("%s", message);
+    fgets(input, len, stdin);
+#else
+    tmp = readline(message);
+    strncpy(input, tmp, len);
+#endif
+
+    remove_unwanted_characters(input);
 }
 
 int main(int argc, char **argv) {
@@ -466,18 +497,12 @@ int main(int argc, char **argv) {
     char *last_slash;
     char emulator_system_file[32];
     int num_files;
-    int sdk_version;
-#ifdef VARIABLES_PROVIDED
-    sdk_version = SYSTEM_DUMP_SDK_VERSION;
-#endif
+    int sdk_version = SYSTEM_DUMP_SDK_VERSION;
     long length = 0;
     FILE *fp;
 
-#ifndef USE_READLINE
-    char filename[256];
-#else
-    char *filename;
-#endif
+    char filename_buf[256];
+    char *filename = filename_buf;
 
 #ifndef VARIABLES_PROVIDED
     printf("System dump SDK version?\n");
@@ -500,16 +525,13 @@ int main(int argc, char **argv) {
     fclose(fp);
 
 #ifndef VARIABLES_PROVIDED
-#ifndef USE_READLINE
-    printf("System dump root?\n");
-    fgets(system_dump_root, sizeof(system_dump_root), stdin);
-#else
-    system_dump_root = readline("System dump root?\n");
-#endif
-    strip_newline(system_dump_root);
+    read_user_input(system_dump_root, sizeof(system_dump_root_buf), "System dump root?\n");
 
     if (build_prop_checker())
         return 1;
+
+    read_user_input(system_vendor, sizeof(system_vendor_buf), "Target vendor name?\n");
+    read_user_input(system_device, sizeof(system_device_buf), "Target device name?\n");
 #endif
 
     printf("How many files?\n");
@@ -517,13 +539,8 @@ int main(int argc, char **argv) {
 
     while (num_files--) {
         printf("Files to go: %d\n", num_files + 1);
-#ifndef USE_READLINE
-        printf("File name?\n");
-        fgets(filename, sizeof(filename), stdin);
-#else
-        filename = readline("File name?\n");
-#endif
-        strip_newline(filename);
+
+        read_user_input(filename, sizeof(filename_buf), "File name?\n");
 
         dot_so_finder(filename);
         last_slash = strrchr(filename, '/');

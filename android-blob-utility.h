@@ -18,8 +18,16 @@
  * MA  02110-1301, USA.
  */
 
-#ifndef SYSTEM_DIRECTORIES_H_
-#define SYSTEM_DIRECTORIES_H_
+#ifndef _ANDROID_BLOB_UTILITY_H_
+#define _ANDROID_BLOB_UTILITY_H_
+
+#define _GNU_SOURCE
+#include <stdlib.h>
+
+#define MAX_LIB_NAME 50
+#define ALL_LIBS_SIZE 16384 /* 16KB */
+
+/* #define DEBUG */
 
 /* Change value below to match your /system dump's SDK version. */
 /* See: https://developer.android.com/guide/topics/manifest/uses-sdk-element.html#ApiLevels */
@@ -27,4 +35,30 @@
 
 #define SYSTEM_DUMP_ROOT "/home/android/system_dump"
 
-#endif /* SYSTEM_DIRECTORIES_H_ */
+#define SYSTEM_VENDOR "manufacturer"
+#define SYSTEM_DEVICE "device"
+
+const char *blob_directories[] = {
+    "/vendor/lib64/egl/",
+    "/vendor/lib/egl/",
+    "/vendor/lib64/hw/",
+    "/vendor/lib/hw/",
+    "/vendor/lib64/",
+    "/vendor/lib/",
+    "/vendor/bin/",
+    "/lib64/egl/",
+    "/lib/egl/",
+    "/lib64/hw/",
+    "/lib/hw/",
+    "/lib64/",
+    "/lib/",
+    "/bin/",
+    NULL
+};
+
+const char *lib_beginning = "lib";
+const char *egl_beginning = "egl";
+
+const char *lib_ending = ".so";
+
+#endif /* _ANDROID_BLOB_UTILITY_H_ */
